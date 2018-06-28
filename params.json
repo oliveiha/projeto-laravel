@@ -1,0 +1,7 @@
+[
+	{"ParameterKey": "CloudFrontOAI", "ParameterValue": "origin-access-identity/cloudfront/laravel.sccon.com.br"},
+	{"ParameterKey": "BaseUrl", "ParameterValue": "laravel.sccon.com.br"},
+	{"ParameterKey": "DBMasterPwd", "ParameterValue": "372013971215"},
+	{"ParameterKey": "CertificateArnCF", "ParameterValue": "arn:aws:acm:us-east-1:893246120310:certificate/43984058-8bd6-43af-9acb-e3c395583d18"},
+	{"ParameterKey": "CertificateArn", "ParameterValue": "arn:aws:acm:us-east-1:893246120310:certificate/43984058-8bd6-43af-9acb-e3c395583d18"}
+]

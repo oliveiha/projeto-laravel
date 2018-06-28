@@ -1,0 +1,180 @@
+Description: >
+
+    This template deploys a VPC, with a pair of public and private subnets spread
+    across two Availability Zones. It deploys an Internet Gateway, with a default
+    route on the public subnets, plus two NAT Gateways for the private ones.
+    It then deploys an Aurora cluster, a public S3 bucket and a corresponding
+    CloudFront distribution.
+    Finally, it deploys an ECS cluster with an Application Load Balancer at the front
+    and one ECR Docker registry to push your Laravel and Nginx images to.
+
+    This template uses the public Docker image getlionel/nginx-to-https to handle
+    redirection from HTTP to HTTPS within the cluster.
+
+    Full article on Medium here: https://medium.com
+
+    Author: Lionel Martin <hi@getlionel.com>
+
+Parameters:
+
+    CertificateArn:
+        Description: The AWS ARN of the SSL certificate to be used by the load-balancer
+        Type: String
+
+    CloudFrontOAI:
+        Description: CloudFront Origin Access Identity
+        Type: String
+
+    CertificateArnCF:
+        Description: AWS ARN of the us-east-1 SSL certificate to be used by CloudFront
+        Type: String
+
+    InstanceType:
+        Description: EC2 instance types to use in our cluster
+        Type: String
+        Default: t2.medium
+
+    ClusterSize:
+        Description: Number of EC2 instances in our ECS cluster
+        Type: String
+        Default: 1
+
+    BaseUrl:
+        Description: Second level domain name for your application (for example laravelaws.com)
+        Type: String
+
+    DBMasterPwd:
+        Description: Postgresql master password
+        Type: String
+
+    DBInstanceSize:
+        Description: DB instance size
+        Type: String
+        Default: db.t2.small
+
+    MailDriver:
+        Description: Mail driver (smtp or log)
+        Type: String
+        Default: log
+
+    MailHost:
+        Description: SMTP host
+        Type: String
+        Default: ""
+
+    MailPort:
+        Description: SMTP port
+        Type: String
+        Default: ""
+
+    MailUsername:
+        Description: SMTP password
+        Type: String
+        Default: ""
+
+    MailPassword:
+        Description: SMTP password
+        Type: String
+        Default: ""
+
+Resources:
+
+    VPC:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: https://s3.amazonaws.com/laravelaws/infrastructure/vpc.yaml
+            Parameters:
+                EnvironmentName:    !Ref AWS::StackName
+                VpcCIDR:            10.180.0.0/16
+                PublicSubnet1CIDR:  10.180.8.0/21
+                PublicSubnet2CIDR:  10.180.16.0/21
+                PrivateSubnet1CIDR: 10.180.24.0/21
+                PrivateSubnet2CIDR: 10.180.32.0/21
+
+    Storage:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: https://s3.amazonaws.com/laravelaws/infrastructure/storage.yaml
+            Parameters:
+                DatabaseInstanceType: !Ref DBInstanceSize
+                DatabasePassword: !Ref DBMasterPwd
+                DatabaseUsername: laravel
+                DatabaseSubnets: !GetAtt VPC.Outputs.PrivateSubnets
+                DatabaseSecurityGroup: !GetAtt VPC.Outputs.DBSecurityGroup
+                DatabaseName: !Ref AWS::StackName
+
+    Web:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: https://s3.amazonaws.com/laravelaws/infrastructure/web.yaml
+            Parameters:
+                EnvironmentName: !Ref AWS::StackName
+                VPC: !GetAtt VPC.Outputs.VPC
+                PrivateSubnets: !GetAtt VPC.Outputs.PrivateSubnets
+                PublicSubnets: !GetAtt VPC.Outputs.PublicSubnets
+                LBCertificateArn: !Ref CertificateArn
+                InstanceType: !Ref InstanceType
+                ClusterSize: !Ref ClusterSize
+                LBSecurityGroup: !GetAtt VPC.Outputs.LoadBalancerSecurityGroup
+                ECSSecurityGroup: !GetAtt VPC.Outputs.ECSSecurityGroup
+                S3BucketName: !GetAtt Storage.Outputs.S3BucketName
+                CloudFrontOAI: !Ref CloudFrontOAI
+                CFCertificateArn: !Ref CertificateArnCF
+                CDNAlias: !Join [ ".", [ "files", !Ref BaseUrl ] ]
+
+    WebService:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: https://s3.amazonaws.com/laravelaws/infrastructure/service.yaml
+            Parameters:
+                VPC: !GetAtt VPC.Outputs.VPC
+                Cluster: !GetAtt Web.Outputs.Cluster
+                ECR: !GetAtt Web.Outputs.ECR
+                ListenerHTTP: !GetAtt Web.Outputs.ListenerHTTP
+                ListenerHTTPS: !GetAtt Web.Outputs.ListenerHTTPS
+                DesiredCount: 1
+                Path: "*"
+                APPURL: !Join [ "", [ "https://", !Ref BaseUrl ] ]
+                DBCONNECTION: mysql
+                DBHOST: !GetAtt Storage.Outputs.EndpointAddress
+                DBPORT: !GetAtt Storage.Outputs.EndpointPort
+                DBDATABASE: !Ref AWS::StackName
+                DBUSERNAME: laravel
+                DBPASSWORD: !Ref DBMasterPwd
+                MAILDRIVER: !Ref MailDriver
+                MAILHOST: !Ref MailHost
+                MAILPORT: !Ref MailPort
+                MAILUSERNAME: !Ref MailUsername
+                MAILPASSWORD: !Ref MailPassword
+                MAILFROMADDRESS: !Join [ "@", [ "admin", !Ref BaseUrl ] ]
+                MAILFROMNAME: !Join [ " ", [ "Admin from", !Ref BaseUrl ] ]
+                FILESYSTEMDRIVER: s3
+                AWSBUCKET: !GetAtt Storage.Outputs.S3BucketName
+                QUEUEDRIVER: sqs
+                QUEUENAME: !GetAtt Web.Outputs.QueueName
+
+Outputs:
+
+    BucketName:
+        Description: S3 Bucket Name with public read access
+        Value: !GetAtt Storage.Outputs.S3BucketName
+
+    QueueName:
+        Description: SQS queue name
+        Value: !GetAtt Web.Outputs.QueueName
+
+    DatabaseInstance:
+        Description: Database instance
+        Value: !Join [ ":", [ !GetAtt Storage.Outputs.EndpointAddress, !GetAtt Storage.Outputs.EndpointPort ] ]
+
+    ECR:
+        Description: The ECR where to push your Docker images
+        Value: !Join [ ".", [ !Ref "AWS::AccountId", "dkr.ecr", !Ref "AWS::Region", !Join [ "/", [ "amazonaws.com", !GetAtt Web.Outputs.ECR ] ] ] ]
+
+    ServiceUrl:
+        Description: The URL endpoint for the website service
+        Value: !Join ["", [ !GetAtt Web.Outputs.LoadBalancerUrl, "/" ]]
+
+#    CloudFrontDistribution:
+#        Description: Domain name for the CloudFront distribution
+#        Value: !GetAtt CDN.Outputs.CFDistributionDomainName
