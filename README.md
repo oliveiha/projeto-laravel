@@ -116,8 +116,41 @@ ADD public /usr/share/nginx/html
 
 WORKDIR /usr/share/nginx/html
 
-Criar uma instancia "Bastion" e efetuar a migração do banco de dados 
+Criar uma instancia Ec2 para efetuar a migração do banco de dados:
+aws ec2 run-instances 
+    --image-id ami-c1a6bda2 
+    --key-name laravelaws            # Keypar para acesso ssh
+    --security-group-ids sg-xxxxxxxx # SG para acesso ao Banco RDS
+    --subnet-id subnet-xxxxxxxx      # Subnet publica para acesso externo
+    --count 1 
+    --instance-type t2.micro         # typo de instancia
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=admin-laravel}]'
+    
+ # Execute os seguintes comando artisan dentro do docker containers 
+     docker exec -it CONTAINER_ID php artisan session:table
+     docker exec -it CONTAINER_ID php artisan migrate --force
+     
+ 
+# Acesse o endpoint RDS:
+ssh -L 54320:aqui_endpoint_rds.rds.amazonaws.com:5432 
+    ec2-user@<ip_publico_admin_laravel> 
+    -i ./laravelaws.pem
 
+# Seu banco de dados remoto agora está acessível a partir da porta 54320 em sua máquina local
+# Antes de tudo vamos criar uma usuario somente leitura no banco de dados.
+
+psql -h localhost -p 54320 -U postgres -W nome_do_banco_aqui
+> CREATE ROLE lionel LOGIN PASSWORD 'a_unique_password_here';
+> GRANT CONNECT ON DATABASE crvs TO tiago;
+> GRANT USAGE ON SCHEMA public TO tiago;
+> GRANT SELECT ON ALL TABLES IN SCHEMA public TO tiago;
+> GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO tiago
+
+# Use as ferramentas de linha de comando pg_dump, pg_restore, vs psql para criar / restaurar um dump de banco de dados.
+pg_dump -h localhost -U tiago -W -p 54320 nome_do_banco > dump_nome_do_banco_$(date +"%m_%d_%Y").sql
+
+# Importe-o para um banco de dados local usando:
+psql -U tiago -w nome_do_banco -f dump_db_name_here_11_23_2017.sql
 
 
 
